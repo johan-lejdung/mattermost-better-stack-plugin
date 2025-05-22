@@ -1,4 +1,4 @@
-package main
+package plugin
 
 import (
 	"reflect"
@@ -18,6 +18,26 @@ import (
 // If you add non-reference types to your configuration struct, be sure to rewrite Clone as a deep
 // copy appropriate for your types.
 type configuration struct {
+	// BetterStackUptimeAPIToken is used to authenticate with the Better Stack Uptime API
+	// for slash commands (on-call schedules, incidents).
+	BetterStackUptimeAPIToken string `json:"betterStackUptimeAPIToken"`
+
+	// AlertChannelID is the Mattermost channel ID where incident alert posts are created.
+	AlertChannelID string `json:"alertChannelId"`
+
+	// WebhookToken is a generated secret token that forms part of the webhook URL path,
+	// e.g. /api/v1/webhook/<token>. Requests with an incorrect token are rejected with 401.
+	// Mattermost auto-generates this value and provides a "Regenerate" button in System Console.
+	WebhookToken string `json:"webhookToken"`
+
+	// WebhookUsername and WebhookPassword are optional Basic Auth credentials validated on
+	// incoming Better Stack webhook requests. When both are empty, Basic Auth is not enforced.
+	WebhookUsername string `json:"webhookUsername"`
+	WebhookPassword string `json:"webhookPassword"`
+
+	// DailyOncallDigest controls whether a daily on-call digest is posted to the alert
+	// channel at 08:00 CEST regardless of whether the on-call person has changed.
+	DailyOncallDigest bool `json:"dailyOncallDigest"`
 }
 
 // Clone shallow copies the configuration. Your implementation may require a deep copy if
@@ -30,7 +50,7 @@ func (c *configuration) Clone() *configuration {
 // getConfiguration retrieves the active configuration under lock, making it safe to use
 // concurrently. The active configuration may change underneath the client of this method, but
 // the struct returned by this API call is considered immutable.
-func (p *Plugin) getConfiguration() *configuration {
+func (p *BetterStackPlugin) getConfiguration() *configuration {
 	p.configurationLock.RLock()
 	defer p.configurationLock.RUnlock()
 
@@ -50,7 +70,7 @@ func (p *Plugin) getConfiguration() *configuration {
 // This method panics if setConfiguration is called with the existing configuration. This almost
 // certainly means that the configuration was modified without being cloned and may result in
 // an unsafe access.
-func (p *Plugin) setConfiguration(configuration *configuration) {
+func (p *BetterStackPlugin) setConfiguration(configuration *configuration) {
 	p.configurationLock.Lock()
 	defer p.configurationLock.Unlock()
 
@@ -69,12 +89,33 @@ func (p *Plugin) setConfiguration(configuration *configuration) {
 }
 
 // OnConfigurationChange is invoked when configuration changes may have been made.
-func (p *Plugin) OnConfigurationChange() error {
+func (p *BetterStackPlugin) OnConfigurationChange() error {
 	var configuration = new(configuration)
 
 	// Load the public configuration fields from the Mattermost server configuration.
 	if err := p.API.LoadPluginConfiguration(configuration); err != nil {
 		return errors.Wrap(err, "failed to load plugin configuration")
+	}
+
+	// All fields are warn-only at config load time so that the first save in System Console
+	// succeeds (allowing Mattermost to generate the webhook token). Missing fields are enforced
+	// at runtime in the relevant handlers instead.
+	if configuration.BetterStackUptimeAPIToken == "" {
+		p.API.LogWarn("Better Stack API token is not set. Slash commands will not work until configured.")
+	}
+
+	if configuration.AlertChannelID == "" {
+		p.API.LogWarn("Alert channel ID is not set. Incoming webhooks will not post until configured.")
+	}
+
+	if configuration.WebhookToken == "" {
+		p.API.LogWarn("Webhook token not yet generated. Save the plugin settings in System Console.")
+	}
+
+	// Basic Auth is optional but must be all-or-nothing — this is the one hard error since
+	// a half-configured Basic Auth would silently accept or reject all webhooks.
+	if (configuration.WebhookUsername == "") != (configuration.WebhookPassword == "") {
+		return errors.New("both webhook username and password must be set, or both left empty")
 	}
 
 	p.setConfiguration(configuration)

@@ -1,26 +1,84 @@
 {
-    "id": "com.mattermost.plugin-starter-template",
-    "name": "Plugin Starter Template",
-    "description": "This plugin serves as a starting point for writing a Mattermost plugin.",
-    "homepage_url": "https://github.com/mattermost/mattermost-plugin-starter-template",
-    "support_url": "https://github.com/mattermost/mattermost-plugin-starter-template/issues",
-    "icon_path": "assets/starter-template-icon.svg",
-    "min_server_version": "6.2.1",
-    "server": {
-        "executables": {
-            "linux-amd64": "server/dist/plugin-linux-amd64",
-            "linux-arm64": "server/dist/plugin-linux-arm64",
-            "darwin-amd64": "server/dist/plugin-darwin-amd64",
-            "darwin-arm64": "server/dist/plugin-darwin-arm64",
-            "windows-amd64": "server/dist/plugin-windows-amd64.exe"
-        }
-    },
-    "webapp": {
-        "bundle_path": "webapp/dist/main.js"
-    },
-    "settings_schema": {
-        "header": "",
-        "footer": "",
-        "settings": []
+  "id": "com.mattermost.plugin-better-stack",
+  "name": "Better Stack",
+  "description": "Integrates Better Stack with Mattermost: incident alerts, on-call schedules, monitor status, and slash commands.",
+  "homepage_url": "https://github.com/johan-lejdung/mattermost-better-stack-plugin",
+  "support_url": "https://github.com/johan-lejdung/mattermost-better-stack-plugin/issues",
+  "icon_path": "assets/betterstack_logo.jpg",
+  "min_server_version": "6.2.1",
+  "server": {
+    "executables": {
+      "linux-amd64": "server/dist/plugin-linux-amd64",
+      "linux-arm64": "server/dist/plugin-linux-arm64",
+      "darwin-amd64": "server/dist/plugin-darwin-amd64",
+      "darwin-arm64": "server/dist/plugin-darwin-arm64",
+      "windows-amd64": "server/dist/plugin-windows-amd64.exe"
     }
+  },
+  "webapp": {
+    "bundle_path": "webapp/dist/main.js"
+  },
+  "settings_schema": {
+    "header": "",
+    "footer": "",
+    "sections": [
+      {
+        "key": "webhook-url-display",
+        "title": "Webhook URL",
+        "subtitle": "Copy this URL into Better Stack as the webhook destination.",
+        "custom": true,
+        "fallback": false,
+        "settings": []
+      },
+      {
+        "key": "general",
+        "title": "Configuration",
+        "settings": [
+          {
+            "key": "betterStackUptimeAPIToken",
+            "display_name": "Better Stack Uptime API Token:",
+            "type": "text",
+            "help_text": "The API token used to interact with the Better Stack Uptime API (on-call schedules, incidents).",
+            "default": ""
+          },
+          {
+            "key": "alertChannelId",
+            "display_name": "Alert Channel ID:",
+            "type": "text",
+            "help_text": "The ID of the Mattermost channel where incident alerts will be posted. Find the channel ID via Mattermost > Channel Settings > Copy Channel ID.",
+            "default": ""
+          },
+          {
+            "key": "webhookToken",
+            "display_name": "Webhook Secret Token:",
+            "type": "generated",
+            "help_text": "A unique secret token embedded in the webhook URL path. Use the Regenerate button to rotate the token — you must then update the URL in Better Stack.",
+            "regenerate_help_text": "Regenerating invalidates the current webhook URL. Update the URL in Better Stack afterwards."
+          },
+          {
+            "key": "webhookUsername",
+            "display_name": "Webhook Basic Auth Username (optional):",
+            "type": "text",
+            "help_text": "If set together with a password, incoming webhooks must use HTTP Basic Auth. Leave empty to rely on the secret token URL alone.",
+            "default": ""
+          },
+          {
+            "key": "webhookPassword",
+            "display_name": "Webhook Basic Auth Password (optional):",
+            "type": "text",
+            "secret": true,
+            "help_text": "If set together with a username, incoming webhooks must use HTTP Basic Auth. Leave empty to rely on the secret token URL alone.",
+            "default": ""
+          },
+          {
+            "key": "dailyOncallDigest",
+            "display_name": "Daily On-Call Digest:",
+            "type": "bool",
+            "help_text": "When enabled, posts the current on-call roster to the alert channel every morning at 08:00 CET/CEST (Europe/Stockholm time), regardless of whether the on-call person has changed.",
+            "default": "false"
+          }
+        ]
+      }
+    ]
+  }
 }

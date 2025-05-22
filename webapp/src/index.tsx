@@ -8,10 +8,14 @@ import type {GlobalState} from '@mattermost/types/store';
 import manifest from '@/manifest';
 import type {PluginRegistry} from '@/types/mattermost-webapp';
 
+import WebhookURLDisplay from '@/components/webhook_url_display';
+
 export default class Plugin {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars, @typescript-eslint/no-empty-function
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     public async initialize(registry: PluginRegistry, store: Store<GlobalState, Action<Record<string, unknown>>>) {
-        // @see https://developers.mattermost.com/extend/plugins/webapp/reference/
+        // Register a custom section in the System Console plugin settings page
+        // that renders the full webhook URL with a copy button.
+        registry.registerAdminConsoleCustomSection('webhook-url-display', WebhookURLDisplay);
     }
 }
 
