@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/mattermost/mattermost/server/public/model"
@@ -214,4 +215,26 @@ func (m *mockKVStore) StoreIncidentPost(incidentID string, postID string) error 
 
 func (m *mockKVStore) GetIncidentPost(incidentID string) (string, error) {
 	return m.data[incidentID], nil
+}
+
+func (m *mockKVStore) StoreOnCallState(scheduleID string, userIDs []string) error {
+	m.data["oncall_"+scheduleID] = strings.Join(userIDs, ",")
+	return nil
+}
+
+func (m *mockKVStore) GetOnCallState(scheduleID string) ([]string, error) {
+	v := m.data["oncall_"+scheduleID]
+	if v == "" {
+		return nil, nil
+	}
+	return strings.Split(v, ","), nil
+}
+
+func (m *mockKVStore) StoreLastDigestDate(date string) error {
+	m.data["last_digest"] = date
+	return nil
+}
+
+func (m *mockKVStore) GetLastDigestDate() (string, error) {
+	return m.data["last_digest"], nil
 }

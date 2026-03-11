@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
@@ -170,45 +171,105 @@ func (p *BetterStackPlugin) executeOncall() *model.CommandResponse {
 		}
 	}
 
+	now := time.Now().UTC()
+
 	var sb strings.Builder
-	sb.WriteString("### On-call schedules\n\n")
+	sb.WriteString("### :pager: On-call schedules\n\n")
+	sb.WriteString("| Schedule | Now on-call | Next on-call |\n")
+	sb.WriteString("|---|---|---|\n")
 
 	for _, schedule := range schedules {
-		name := schedule.Attributes.Name
-		if name == "" {
-			name = "Default"
+		// Build schedule display name.
+		scheduleName := schedule.Attributes.Name
+		if scheduleName == "" {
+			scheduleName = "Default"
 		}
 		if schedule.Attributes.TeamName != "" {
-			name = schedule.Attributes.TeamName + " — " + name
+			scheduleName = schedule.Attributes.TeamName + " — " + scheduleName
 		}
-
-		sb.WriteString(fmt.Sprintf("**%s**", name))
 		if schedule.Attributes.DefaultCalendar {
-			sb.WriteString(" _(default)_")
+			scheduleName += " _(default)_"
 		}
-		sb.WriteString("\n")
 
+		// Resolve current on-call users.
 		onCallUsers := schedule.Relationships.OnCallUsers.Data
+		var currentCell string
 		if len(onCallUsers) == 0 {
-			sb.WriteString("  - _Nobody currently on call_\n")
+			currentCell = "_nobody_"
 		} else {
+			parts := make([]string, 0, len(onCallUsers))
 			for _, u := range onCallUsers {
-				detail, ok := userDetails[u.ID]
-				if ok {
-					name := strings.TrimSpace(detail.Attributes.FirstName + " " + detail.Attributes.LastName)
-					sb.WriteString(fmt.Sprintf("  - %s <%s>\n", name, detail.Attributes.Email))
-				} else {
-					sb.WriteString(fmt.Sprintf("  - User ID %s <%s>\n", u.ID, u.Meta.Email))
-				}
+				parts = append(parts, p.formatOnCallUser(u.ID, u.Meta.Email, userDetails))
 			}
+			currentCell = strings.Join(parts, ", ")
 		}
-		sb.WriteString("\n")
+
+		// Fetch upcoming events to find who is next.
+		nextCell := p.resolveNextOnCall(client, schedule.ID, now)
+
+		sb.WriteString(fmt.Sprintf("| %s | %s | %s |\n", scheduleName, currentCell, nextCell))
 	}
 
 	return &model.CommandResponse{
 		ResponseType: model.CommandResponseTypeEphemeral,
 		Text:         sb.String(),
 	}
+}
+
+// formatOnCallUser returns a display string for a single on-call user: @mention if the user
+// exists in Mattermost, otherwise "Full Name <email>" from userDetails, or just the email.
+func (p *BetterStackPlugin) formatOnCallUser(userID, email string, userDetails map[string]OnCallUserDetail) string {
+	detail, ok := userDetails[userID]
+	if ok {
+		email = detail.Attributes.Email
+	}
+
+	mmUser, appErr := p.API.GetUserByEmail(email)
+	if appErr == nil && mmUser != nil {
+		return "@" + mmUser.Username
+	}
+
+	if ok {
+		name := strings.TrimSpace(detail.Attributes.FirstName + " " + detail.Attributes.LastName)
+		if name != "" {
+			return name + " <" + email + ">"
+		}
+	}
+	return email
+}
+
+// resolveNextOnCall fetches schedule events and returns a formatted string for the next
+// on-call shift that starts after now. Returns "(unavailable)" on error, "_none scheduled_"
+// if no future event exists.
+func (p *BetterStackPlugin) resolveNextOnCall(client *BetterStackClient, scheduleID string, now time.Time) string {
+	events, err := client.GetOnCallEvents(scheduleID)
+	if err != nil {
+		p.API.LogError("Failed to fetch on-call events", "schedule_id", scheduleID, "error", err.Error())
+		return "_(unavailable)_"
+	}
+
+	for _, ev := range events {
+		startsAt, err := time.Parse(time.RFC3339, ev.StartsAt)
+		if err != nil {
+			continue
+		}
+		if startsAt.After(now) && len(ev.Users) > 0 {
+			// Resolve each email to a @mention or fall back to email.
+			parts := make([]string, 0, len(ev.Users))
+			for _, email := range ev.Users {
+				mmUser, appErr := p.API.GetUserByEmail(email)
+				if appErr == nil && mmUser != nil {
+					parts = append(parts, "@"+mmUser.Username)
+				} else {
+					parts = append(parts, email)
+				}
+			}
+			users := strings.Join(parts, ", ")
+			return fmt.Sprintf("%s (from %s)", users, startsAt.UTC().Format("Mon 02 Jan, 15:04 UTC"))
+		}
+	}
+
+	return "_none scheduled_"
 }
 
 // executeIncidents fetches active (unresolved) incidents from Better Stack.

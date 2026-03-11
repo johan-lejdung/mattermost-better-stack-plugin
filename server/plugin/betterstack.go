@@ -116,6 +116,29 @@ type onCallResponse struct {
 	Included []OnCallUserDetail `json:"included"`
 }
 
+// OnCallEvent represents a single scheduled on-call event (shift) for a calendar.
+type OnCallEvent struct {
+	ID       int      `json:"id"`
+	Users    []string `json:"users"` // list of email addresses
+	StartsAt string   `json:"starts_at"`
+	EndsAt   string   `json:"ends_at"`
+	Override bool     `json:"override"`
+}
+
+type onCallEventsResponse struct {
+	Events []OnCallEvent `json:"events"`
+}
+
+// GetOnCallEvents returns all scheduled events for the given on-call schedule.
+// Events are in chronological order and include both past and future shifts.
+func (c *BetterStackClient) GetOnCallEvents(scheduleID string) ([]OnCallEvent, error) {
+	var resp onCallEventsResponse
+	if err := c.get("/v2/on-calls/"+scheduleID+"/events", &resp); err != nil {
+		return nil, err
+	}
+	return resp.Events, nil
+}
+
 // GetOnCallSchedules returns all on-call schedules with their currently on-call users.
 func (c *BetterStackClient) GetOnCallSchedules() ([]OnCallSchedule, map[string]OnCallUserDetail, error) {
 	var resp onCallResponse
