@@ -15,7 +15,7 @@ This plugin was built with the assistance of AI tooling and has been reviewed by
 - **On-call change notifications** — The plugin polls Better Stack every 10 minutes and posts to the alert channel whenever the on-call person changes, tagging them with a Mattermost `@mention` if their Better Stack email matches a Mattermost account.
 - **Daily on-call digest** — Optionally post the full on-call roster every morning at 08:00 CET/CEST, regardless of whether anything has changed.
 - **Slash commands** — Query Better Stack directly from any Mattermost channel:
-    - `/betterstack oncall` — Who is currently on call across all schedules
+    - `/betterstack oncall` — Who is currently on call, and next person on call across all schedules
     - `/betterstack incidents` — Active (unresolved) incidents
     - `/betterstack monitors all` — All monitors and their current status
     - `/betterstack monitors down` — Only failing monitors
