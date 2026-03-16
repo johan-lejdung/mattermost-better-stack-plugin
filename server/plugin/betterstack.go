@@ -289,10 +289,11 @@ func (p *WebhookPayload) FormatOriginalPost() string {
 }
 
 // FormatLogsReply builds a thread reply containing the surrounding log lines.
-// Returns an empty string if there are no surrounding logs.
+// Returns an empty string if there are no surrounding logs or if the value is
+// the literal unexpanded Better Stack template placeholder.
 func (p *WebhookPayload) FormatLogsReply() string {
 	logs := p.Data.Attributes.SurroundingLogs
-	if logs == "" {
+	if logs == "" || logs == "$METADATA.Surrounding logs" {
 		return ""
 	}
 	return "**Surrounding logs:**\n```\n" + logs + "\n```"

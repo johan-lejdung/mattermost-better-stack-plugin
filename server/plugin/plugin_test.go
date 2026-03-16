@@ -202,6 +202,38 @@ func TestWebhookBasicAuthAccepted(t *testing.T) {
 	assert.Equal(http.StatusOK, w.Code)
 }
 
+func TestFormatLogsReply(t *testing.T) {
+	cases := []struct {
+		name     string
+		logs     string
+		expected string
+	}{
+		{
+			name:     "empty string returns empty",
+			logs:     "",
+			expected: "",
+		},
+		{
+			name:     "unexpanded Better Stack placeholder returns empty",
+			logs:     "$METADATA.Surrounding logs",
+			expected: "",
+		},
+		{
+			name:     "real log content is formatted",
+			logs:     "2024-01-01 error: something failed",
+			expected: "**Surrounding logs:**\n```\n2024-01-01 error: something failed\n```",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &WebhookPayload{}
+			p.Data.Attributes.SurroundingLogs = tc.logs
+			assert.Equal(t, tc.expected, p.FormatLogsReply())
+		})
+	}
+}
+
 // mockKVStore is an in-memory KVStore implementation for tests.
 // Keys are the raw incidentID — the real kvstore package adds its own prefix.
 type mockKVStore struct {

@@ -73,7 +73,7 @@ Configure your Better Stack webhook with the following JSON body to include surr
         "type": "incident",
         "attributes": {
             "name": "$NAME",
-            "url": "$URL",
+            "url": "$INCIDENT_URL",
             "http_method": "$HTTP_METHOD",
             "cause": "$CAUSE",
             "started_at": "$STARTED_AT",
