@@ -120,6 +120,49 @@ func TestWebhookExistingIncident(t *testing.T) {
 	api.AssertCalled(t, "UpdatePost", mock.Anything)
 }
 
+// TestWebhookExistingIncidentPostDeleted verifies that when the KV store has a mapping for an
+// incident but the referenced post has since been deleted, the plugin falls back to creating a
+// new post rather than returning an error.
+func TestWebhookExistingIncidentPostDeleted(t *testing.T) {
+	assert := assert.New(t)
+	api := &plugintest.API{}
+
+	// GetPost returns an error simulating the post having been deleted.
+	api.On("GetPost", "post-123").Return(nil, &model.AppError{Message: "post not found"})
+	// The fallback path should create a new post.
+	api.On("CreatePost", mock.MatchedBy(func(post *model.Post) bool {
+		return post.ChannelId == "test-channel" && post.RootId == ""
+	})).Return(&model.Post{Id: "new-post-789"}, nil)
+	api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+
+	kv := &mockKVStore{data: map[string]string{
+		"inc-1": "post-123",
+	}}
+
+	p := &BetterStackPlugin{}
+	p.SetAPI(api)
+	p.configuration = &configuration{
+		BetterStackUptimeAPIToken: "test-token",
+		AlertChannelID:            "test-channel",
+		WebhookToken:              testWebhookToken,
+	}
+	p.botUserID = "bot-user-id"
+	p.kvstore = kv
+
+	body := buildWebhookPayload("inc-1", "Homepage down", "Status 404", "2024-01-01T10:00:00Z", "", "")
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, webhookURL(testWebhookToken), bytes.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+
+	p.ServeHTTP(nil, w, r)
+
+	assert.Equal(http.StatusOK, w.Code)
+	api.AssertCalled(t, "GetPost", "post-123")
+	api.AssertCalled(t, "CreatePost", mock.Anything)
+}
+
 func TestWebhookWrongToken(t *testing.T) {
 	assert := assert.New(t)
 	api := &plugintest.API{}
@@ -200,6 +243,41 @@ func TestWebhookBasicAuthAccepted(t *testing.T) {
 	p.ServeHTTP(nil, w, r)
 
 	assert.Equal(http.StatusOK, w.Code)
+}
+
+func TestFormatTime(t *testing.T) {
+	cases := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "empty string returns empty",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "RFC3339 format is parsed",
+			input:    "2026-03-16T08:34:52Z",
+			expected: "**08:34:52 UTC** (Mon 16 Mar)",
+		},
+		{
+			name:     "Better Stack test webhook format is parsed",
+			input:    "2026-03-16 08:34:52 UTC",
+			expected: "**08:34:52 UTC** (Mon 16 Mar)",
+		},
+		{
+			name:     "unparseable string is returned as-is",
+			input:    "not a timestamp",
+			expected: "not a timestamp",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, formatTime(tc.input))
+		})
+	}
 }
 
 func TestFormatLogsReply(t *testing.T) {

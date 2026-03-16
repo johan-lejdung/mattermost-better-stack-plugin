@@ -18,15 +18,17 @@ func formatTime(ts string) string {
 	if ts == "" {
 		return ts
 	}
-	t, err := time.Parse(time.RFC3339, ts)
-	if err != nil {
-		// Try without timezone suffix (some Better Stack fields omit it)
-		t, err = time.Parse("2006-01-02T15:04:05", ts)
-		if err != nil {
-			return ts
+	formats := []string{
+		time.RFC3339,
+		"2006-01-02T15:04:05",
+		"2006-01-02 15:04:05 UTC", // Better Stack test webhook format
+	}
+	for _, f := range formats {
+		if t, err := time.Parse(f, ts); err == nil {
+			return t.UTC().Format("**15:04:05 UTC** (Mon 02 Jan)")
 		}
 	}
-	return t.UTC().Format("**15:04:05 UTC** (Mon 02 Jan)")
+	return ts
 }
 
 // BetterStackClient is a minimal HTTP client for the Better Stack Uptime API.

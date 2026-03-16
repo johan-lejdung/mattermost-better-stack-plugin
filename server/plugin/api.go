@@ -130,7 +130,18 @@ func (p *BetterStackPlugin) handleNewIncident(w http.ResponseWriter, config *con
 }
 
 // handleExistingIncident posts a thread reply and updates the status footer on the original post.
+// If the original post no longer exists (e.g. it was deleted), it falls back to creating a new post.
 func (p *BetterStackPlugin) handleExistingIncident(w http.ResponseWriter, config *configuration, payload *WebhookPayload, existingPostID string) {
+	incidentID := payload.Data.ID
+
+	// --- Verify the original post still exists ---
+	originalPost, appErr := p.API.GetPost(existingPostID)
+	if appErr != nil {
+		p.API.LogWarn("Original incident post not found; creating a new post", "post_id", existingPostID, "incident_id", incidentID)
+		p.handleNewIncident(w, config, payload, incidentID)
+		return
+	}
+
 	// --- Post a thread reply with the status update ---
 	reply := &model.Post{
 		UserId:    p.botUserID,
@@ -145,13 +156,6 @@ func (p *BetterStackPlugin) handleExistingIncident(w http.ResponseWriter, config
 	}
 
 	// --- Update the status footer on the original post ---
-	originalPost, appErr := p.API.GetPost(existingPostID)
-	if appErr != nil {
-		p.API.LogError("Failed to get original incident post", "post_id", existingPostID, "error", appErr.Error())
-		http.Error(w, "Failed to update post", http.StatusInternalServerError)
-		return
-	}
-
 	originalPost.Message = payload.updateStatusFooter(originalPost.Message)
 
 	if _, appErr := p.API.UpdatePost(originalPost); appErr != nil {
