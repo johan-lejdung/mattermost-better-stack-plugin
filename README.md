@@ -118,7 +118,9 @@ The plugin exposes a health endpoint so you can be alerted when the integration 
 GET <siteUrl>/plugins/com.mattermost.plugin-better-stack/api/v1/health/<webhook-token>
 ```
 
-The URL is shown under **Uptime Check URL** at the top of the System Console settings page. It is protected by the same secret token as the webhook (and the same optional Basic Auth), so it is not reachable by anyone who does not already hold the webhook URL — an unauthenticated request gets a bare `401` and reveals nothing about the instance.
+The URL is shown under **Uptime Check URL** at the top of the System Console settings page. It is protected by the same secret token as the webhook, so it is not reachable by anyone who does not already hold the webhook URL — an unauthenticated request gets a bare `401` and reveals nothing about the instance. The plugin logs which check rejected the request, so a `401` can be diagnosed from the plugin logs without leaking the reason to the caller.
+
+The uptime check deliberately does **not** enforce the optional Webhook Basic Auth. Those credentials exist for Better Stack's incident posts; anyone holding the URL already has the secret token, and requiring a second credential on a health endpoint mostly adds a way for the monitor itself to fail with a false alarm.
 
 The endpoint returns **200** when everything is healthy and **503** when any check fails, so a Better Stack HTTP monitor can alarm on the status code alone. The body names the failing check:
 

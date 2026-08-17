@@ -166,6 +166,7 @@ func TestWebhookExistingIncidentPostDeleted(t *testing.T) {
 func TestWebhookWrongToken(t *testing.T) {
 	assert := assert.New(t)
 	api := &plugintest.API{}
+	api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 
 	p := &BetterStackPlugin{}
 	p.SetAPI(api)
@@ -190,6 +191,7 @@ func TestWebhookWrongToken(t *testing.T) {
 func TestWebhookBasicAuthRejected(t *testing.T) {
 	assert := assert.New(t)
 	api := &plugintest.API{}
+	api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 
 	p := &BetterStackPlugin{}
 	p.SetAPI(api)

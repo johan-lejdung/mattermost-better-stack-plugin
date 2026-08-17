@@ -24,10 +24,12 @@ func (p *BetterStackPlugin) ServeHTTP(c *plugin.Context, w http.ResponseWriter, 
 	router.ServeHTTP(w, r)
 }
 
-// authorizeSecret validates the secret token in the URL path and, when configured, the
-// Basic Auth credentials. It writes the error response and returns false if the request
-// is not authorized.
-func (p *BetterStackPlugin) authorizeSecret(w http.ResponseWriter, r *http.Request, config *configuration) bool {
+// authorizeToken validates the secret token in the URL path, which every unauthenticated
+// route requires. It writes the error response and returns false if the token is wrong.
+//
+// A rejection tells the caller nothing beyond "unauthorized", so the reason is logged
+// instead. Neither the expected nor the supplied secret is ever logged.
+func (p *BetterStackPlugin) authorizeToken(w http.ResponseWriter, r *http.Request, config *configuration) bool {
 	if config.WebhookToken == "" {
 		p.API.LogError("Request received but webhook token is not configured", "path", r.URL.Path)
 		http.Error(w, "Webhook not configured", http.StatusServiceUnavailable)
@@ -35,16 +37,34 @@ func (p *BetterStackPlugin) authorizeSecret(w http.ResponseWriter, r *http.Reque
 	}
 
 	if subtle.ConstantTimeCompare([]byte(mux.Vars(r)["token"]), []byte(config.WebhookToken)) != 1 {
+		p.API.LogWarn("Rejected request: secret token in the URL does not match the configured Webhook Secret Token",
+			"path", r.URL.Path, "remote_addr", r.RemoteAddr)
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return false
 	}
 
-	if config.WebhookUsername != "" && config.WebhookPassword != "" {
-		username, password, ok := r.BasicAuth()
-		if !ok || username != config.WebhookUsername || password != config.WebhookPassword {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return false
-		}
+	return true
+}
+
+// authorizeBasicAuth enforces the optional Basic Auth credentials. When they are not
+// configured, every request passes.
+//
+// This applies to the Better Stack webhook only. The uptime check is authorized by its
+// secret token alone, so a monitor can poll it without being given the same credentials
+// Better Stack posts incidents with.
+func (p *BetterStackPlugin) authorizeBasicAuth(w http.ResponseWriter, r *http.Request, config *configuration) bool {
+	if config.WebhookUsername == "" || config.WebhookPassword == "" {
+		return true
+	}
+
+	username, password, ok := r.BasicAuth()
+	if !ok || username != config.WebhookUsername || password != config.WebhookPassword {
+		p.API.LogWarn("Rejected request: Basic Auth is configured but the credentials were missing or incorrect",
+			"path", r.URL.Path, "remote_addr", r.RemoteAddr, "credentials_supplied", ok)
+		// Tell well-behaved clients that credentials are expected.
+		w.Header().Set("WWW-Authenticate", `Basic realm="Better Stack plugin"`)
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return false
 	}
 
 	return true
@@ -61,7 +81,10 @@ func (p *BetterStackPlugin) handleWebhook(w http.ResponseWriter, r *http.Request
 	config := p.getConfiguration()
 
 	// --- Secret token and optional Basic Auth validation ---
-	if !p.authorizeSecret(w, r, config) {
+	if !p.authorizeToken(w, r, config) {
+		return
+	}
+	if !p.authorizeBasicAuth(w, r, config) {
 		return
 	}
 

@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -80,6 +81,7 @@ func TestHealthHealthy(t *testing.T) {
 func TestHealthWrongToken(t *testing.T) {
 	assert := assert.New(t)
 	api := &plugintest.API{}
+	api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 
 	w, _ := doHealthRequest(newHealthPlugin(api), "not-the-token")
 
@@ -101,7 +103,10 @@ func TestHealthTokenNotConfigured(t *testing.T) {
 	assert.Equal(http.StatusServiceUnavailable, w.Code)
 }
 
-func TestHealthBasicAuthEnforced(t *testing.T) {
+// TestHealthIgnoresBasicAuth verifies the uptime check is authorized by its secret token
+// alone. The webhook's optional Basic Auth credentials are for Better Stack's incident
+// posts; requiring them here would mean handing them to every uptime monitor as well.
+func TestHealthIgnoresBasicAuth(t *testing.T) {
 	assert := assert.New(t)
 	api := &plugintest.API{}
 	api.On("GetChannel", "test-channel").Return(&model.Channel{Id: "test-channel"}, nil)
@@ -112,16 +117,43 @@ func TestHealthBasicAuthEnforced(t *testing.T) {
 	p.configuration.WebhookUsername = "monitor"
 	p.configuration.WebhookPassword = "hunter2"
 
-	// Without credentials the request is rejected.
+	// No credentials — still authorized by the token in the path.
 	w, _ := doHealthRequest(p, testWebhookToken)
-	assert.Equal(http.StatusUnauthorized, w.Code)
+	assert.Equal(http.StatusOK, w.Code)
 
-	// With the right credentials it succeeds.
+	// Supplying credentials is harmless.
 	w = httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, healthURL(testWebhookToken), nil)
 	r.SetBasicAuth("monitor", "hunter2")
 	p.ServeHTTP(nil, w, r)
 	assert.Equal(http.StatusOK, w.Code)
+
+	// The wrong token is still rejected regardless.
+	api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	w, _ = doHealthRequest(p, "not-the-token")
+	assert.Equal(http.StatusUnauthorized, w.Code)
+}
+
+// TestWebhookStillRequiresBasicAuth guards that decoupling the uptime check did not
+// relax the webhook.
+func TestWebhookStillRequiresBasicAuth(t *testing.T) {
+	assert := assert.New(t)
+	api := &plugintest.API{}
+	api.On("LogWarn", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+
+	p := newHealthPlugin(api)
+	p.configuration.WebhookUsername = "betterstack"
+	p.configuration.WebhookPassword = "hunter2"
+	p.kvstore = &mockKVStore{data: map[string]string{}}
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, webhookURL(testWebhookToken),
+		bytes.NewReader(buildWebhookPayload("inc-1", "Down", "500", "2024-01-01T10:00:00Z", "", "")))
+	p.ServeHTTP(nil, w, r)
+
+	assert.Equal(http.StatusUnauthorized, w.Code)
+	assert.Equal(`Basic realm="Better Stack plugin"`, w.Header().Get("WWW-Authenticate"))
+	api.AssertNotCalled(t, "CreatePost", mock.Anything)
 }
 
 func TestHealthAlertChannelMissing(t *testing.T) {

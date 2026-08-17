@@ -43,12 +43,14 @@ type healthResponse struct {
 // monitor can alarm on the status code alone. The JSON body names the failing check for
 // whoever investigates the alert.
 //
-// The endpoint is only reachable with the webhook secret token in the path (plus Basic
-// Auth when configured), so it never exposes plugin state to unauthenticated callers.
+// The endpoint is only reachable with the webhook secret token in the path, so it never
+// exposes plugin state to unauthenticated callers. It deliberately does not enforce the
+// webhook's optional Basic Auth: those credentials belong to Better Stack's incident
+// posts, and an uptime monitor should not need them to poll this.
 func (p *BetterStackPlugin) handleHealth(w http.ResponseWriter, r *http.Request) {
 	config := p.getConfiguration()
 
-	if !p.authorizeSecret(w, r, config) {
+	if !p.authorizeToken(w, r, config) {
 		return
 	}
 
