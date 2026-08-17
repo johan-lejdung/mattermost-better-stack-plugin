@@ -5,7 +5,6 @@ go 1.22.0
 toolchain go1.22.8
 
 require (
-	github.com/golang/mock v1.6.0
 	github.com/mattermost/mattermost/server/public v0.1.10
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.10.0
