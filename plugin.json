@@ -31,6 +31,14 @@
         "settings": []
       },
       {
+        "key": "health-url-display",
+        "title": "Uptime Check URL",
+        "subtitle": "Monitor this URL from Better Stack to be alerted if the integration breaks.",
+        "custom": true,
+        "fallback": false,
+        "settings": []
+      },
+      {
         "key": "general",
         "title": "Configuration",
         "settings": [

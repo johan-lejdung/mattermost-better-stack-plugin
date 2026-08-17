@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 )
@@ -70,6 +71,14 @@ func (c *BetterStackClient) get(path string, out interface{}) error {
 		return fmt.Errorf("failed to decode response: %w", err)
 	}
 	return nil
+}
+
+// Ping performs the cheapest authenticated call available against the Better Stack
+// Uptime API to verify that the API is reachable and the configured token is valid.
+// It requests a single monitor and discards the payload.
+func (c *BetterStackClient) Ping() error {
+	var resp struct{}
+	return c.get("/v2/monitors?per_page=1", &resp)
 }
 
 // ---------------------------------------------------------------------------
@@ -213,42 +222,136 @@ type WebhookPayload struct {
 			AcknowledgedAt  string `json:"acknowledged_at"`
 			AcknowledgedBy  string `json:"acknowledged_by"`
 			ResolvedAt      string `json:"resolved_at"`
+			ResolvedBy      string `json:"resolved_by"`
 			ResponseContent string `json:"response_content"`
 			ResponseURL     string `json:"response_url"`
 			ScreenshotURL   string `json:"screenshot_url"`
 			SurroundingLogs string `json:"surrounding_logs"`
+
+			// Comment fields are only populated on incident comment events.
+			CommentID          string `json:"comment_id"`
+			CommentContent     string `json:"comment_content"`
+			CommentCreatedAt   string `json:"comment_created_at"`
+			CommentAuthorName  string `json:"comment_author_name"`
+			CommentAuthorEmail string `json:"comment_author_email"`
 		} `json:"attributes"`
 	} `json:"data"`
 }
+
+// placeholderFields pairs each payload field with the Better Stack template variable
+// that fills it. Better Stack leaves a variable unexpanded when the incident carries no
+// value for it — an alarm webhook arrives with the literal text "$RESOLVED_BY" rather
+// than an empty string — so the literal must be treated as absent before rendering.
+//
+// The comparison is exact, so a real value that merely starts with "$" is left alone.
+func (p *WebhookPayload) placeholderFields() map[*string][]string {
+	attrs := &p.Data.Attributes
+	return map[*string][]string{
+		&attrs.Name:               {"$NAME"},
+		&attrs.URL:                {"$INCIDENT_URL", "$URL"},
+		&attrs.HTTPMethod:         {"$HTTP_METHOD"},
+		&attrs.Cause:              {"$CAUSE"},
+		&attrs.StartedAt:          {"$STARTED_AT", "$STARTED_AT_ISO8601"},
+		&attrs.AcknowledgedAt:     {"$ACKNOWLEDGED_AT", "$ACKNOWLEDGED_AT_ISO8601"},
+		&attrs.AcknowledgedBy:     {"$ACKNOWLEDGED_BY"},
+		&attrs.ResolvedAt:         {"$RESOLVED_AT", "$RESOLVED_AT_ISO8601"},
+		&attrs.ResolvedBy:         {"$RESOLVED_BY"},
+		&attrs.ResponseContent:    {"$RESPONSE_CONTENT"},
+		&attrs.ResponseURL:        {"$RESPONSE_URL"},
+		&attrs.ScreenshotURL:      {"$SCREENSHOT_URL"},
+		&attrs.SurroundingLogs:    {"$METADATA.Surrounding logs", "$METADATA_ARRAY"},
+		&attrs.CommentID:          {"$COMMENT_ID"},
+		&attrs.CommentContent:     {"$COMMENT_CONTENT"},
+		&attrs.CommentCreatedAt:   {"$COMMENT_CREATED_AT", "$COMMENT_CREATED_AT_ISO8601"},
+		&attrs.CommentAuthorName:  {"$COMMENT_AUTHOR_NAME"},
+		&attrs.CommentAuthorEmail: {"$COMMENT_AUTHOR_EMAIL"},
+	}
+}
+
+// normalize blanks every field that still holds its unexpanded template variable, so the
+// rest of the plugin can treat "absent" as an empty string.
+func (p *WebhookPayload) normalize() {
+	for field, placeholders := range p.placeholderFields() {
+		if slices.Contains(placeholders, *field) {
+			*field = ""
+		}
+	}
+}
+
+// IsComment reports whether this webhook is an incident comment event rather than a
+// status change.
+func (p *WebhookPayload) IsComment() bool {
+	return p.Data.Attributes.CommentContent != ""
+}
+
+// Incident statuses shown in the post footer and thread replies.
+const (
+	statusAlarm        = "ALARM"
+	statusAcknowledged = "ACKNOWLEDGED"
+	statusResolved     = "RESOLVED"
+	statusReopened     = "REOPENED"
+)
 
 // Status returns a human-readable status string derived from the incident timestamps.
 func (p *WebhookPayload) Status() string {
 	attrs := p.Data.Attributes
 	switch {
 	case attrs.ResolvedAt != "":
-		return "RESOLVED"
+		return statusResolved
 	case attrs.AcknowledgedAt != "":
-		return "ACKNOWLEDGED"
+		return statusAcknowledged
 	default:
-		return "ALARM"
+		return statusAlarm
 	}
 }
 
-// StatusLabel returns the emoji + status text used in both the footer and thread replies.
-func (p *WebhookPayload) StatusLabel() string {
-	switch p.Status() {
-	case "RESOLVED":
+// EffectiveStatus refines Status using the status the incident post showed before this
+// webhook arrived. Better Stack clears the timestamps when an incident is reopened, which
+// is indistinguishable from a fresh alarm on timestamps alone — but an incident that
+// alarms again after being resolved has been reopened. Pass an empty previousStatus for
+// an incident we have not posted about yet.
+func (p *WebhookPayload) EffectiveStatus(previousStatus string) string {
+	status := p.Status()
+	if status == statusAlarm && previousStatus == statusResolved {
+		return statusReopened
+	}
+	return status
+}
+
+// statusLabel returns the emoji + status text used in both the footer and thread replies.
+func statusLabel(status string) string {
+	switch status {
+	case statusResolved:
 		return ":white_check_mark: RESOLVED"
-	case "ACKNOWLEDGED":
+	case statusAcknowledged:
 		return ":bell: ACKNOWLEDGED"
+	case statusReopened:
+		return ":arrows_counterclockwise: REOPENED"
 	default:
 		return ":red_circle: ALARM"
 	}
 }
 
-// FormatOriginalPost builds the full markdown message for the original incident post.
-// The footer line contains the latest status and will be updated on each webhook call.
-func (p *WebhookPayload) FormatOriginalPost() string {
+// previousStatusFromPost reads the status recorded in an existing incident post's footer.
+// Returns an empty string if the post has no recognisable footer.
+func previousStatusFromPost(message string) string {
+	idx := strings.LastIndex(message, "**Latest status:**")
+	if idx < 0 {
+		return ""
+	}
+	footer := message[idx:]
+	for _, status := range []string{statusReopened, statusResolved, statusAcknowledged, statusAlarm} {
+		if strings.Contains(footer, status) {
+			return status
+		}
+	}
+	return ""
+}
+
+// FormatOriginalPost builds the full markdown message for the incident post. It is
+// re-rendered from the payload on every webhook for the incident, so the acknowledged and
+// resolved lines always reflect the latest state — including a reopen, which clears them.
+func (p *WebhookPayload) FormatOriginalPost(status string) string {
 	attrs := p.Data.Attributes
 
 	ackLine := "_Not acknowledged_"
@@ -262,6 +365,9 @@ func (p *WebhookPayload) FormatOriginalPost() string {
 	resolvedLine := "_Not resolved_"
 	if attrs.ResolvedAt != "" {
 		resolvedLine = formatTime(attrs.ResolvedAt)
+		if attrs.ResolvedBy != "" {
+			resolvedLine += " by " + attrs.ResolvedBy
+		}
 	}
 
 	incidentURL := attrs.URL
@@ -284,7 +390,7 @@ func (p *WebhookPayload) FormatOriginalPost() string {
 		ackLine,
 		resolvedLine,
 		incidentURL,
-		p.StatusLabel(),
+		statusLabel(status),
 	)
 
 	return body
@@ -301,41 +407,50 @@ func (p *WebhookPayload) FormatLogsReply() string {
 	return "**Surrounding logs:**\n```\n" + logs + "\n```"
 }
 
-// FormatThreadReply builds a short status-update message for posting in the incident thread.
-func (p *WebhookPayload) FormatThreadReply() string {
+// FormatThreadReply builds a short status-update message for posting in the incident
+// thread. Each status is attributed to the person who performed that action: an
+// acknowledgement to the acknowledger, a resolution to the resolver.
+func (p *WebhookPayload) FormatThreadReply(status string) string {
 	attrs := p.Data.Attributes
-	status := p.Status()
 
 	switch status {
-	case "RESOLVED":
-		by := ""
-		if attrs.AcknowledgedBy != "" {
-			by = " by " + attrs.AcknowledgedBy
-		}
-		return fmt.Sprintf(":white_check_mark: **Resolved**%s at %s", by, formatTime(attrs.ResolvedAt))
-	case "ACKNOWLEDGED":
-		by := ""
-		if attrs.AcknowledgedBy != "" {
-			by = " by " + attrs.AcknowledgedBy
-		}
-		return fmt.Sprintf(":bell: **Acknowledged**%s at %s", by, formatTime(attrs.AcknowledgedAt))
+	case statusResolved:
+		return fmt.Sprintf(":white_check_mark: **Resolved**%s at %s", by(attrs.ResolvedBy), formatTime(attrs.ResolvedAt))
+	case statusAcknowledged:
+		return fmt.Sprintf(":bell: **Acknowledged**%s at %s", by(attrs.AcknowledgedBy), formatTime(attrs.AcknowledgedAt))
+	case statusReopened:
+		return fmt.Sprintf(":arrows_counterclockwise: **Reopened** — %s", attrs.Cause)
 	default:
 		return fmt.Sprintf(":red_circle: **ALARM** — %s (started %s)", attrs.Cause, formatTime(attrs.StartedAt))
 	}
 }
 
-// updateStatusFooter replaces the `**Latest status:** …` line at the end of an existing post
-// with the new status from this payload. If the footer line is not found, it is appended.
-func (p *WebhookPayload) updateStatusFooter(existing string) string {
-	newFooter := "\n---\n**Latest status:** " + p.StatusLabel()
-
-	// Find the last occurrence of the separator before the status footer.
-	const marker = "\n---\n**Latest status:**"
-	if idx := strings.LastIndex(existing, marker); idx >= 0 {
-		return existing[:idx] + newFooter
+// FormatCommentReply builds a thread reply for an incident comment event. Returns an
+// empty string if the payload carries no comment.
+func (p *WebhookPayload) FormatCommentReply() string {
+	attrs := p.Data.Attributes
+	if attrs.CommentContent == "" {
+		return ""
 	}
-	// Footer not found — append it.
-	return existing + newFooter
+
+	author := attrs.CommentAuthorName
+	if author == "" {
+		author = attrs.CommentAuthorEmail
+	}
+	if author == "" {
+		author = "someone"
+	}
+
+	return fmt.Sprintf(":speech_balloon: **Comment** from %s:\n\n> %s",
+		author, strings.ReplaceAll(attrs.CommentContent, "\n", "\n> "))
+}
+
+// by renders an optional " by <name>" suffix, empty when the name is unknown.
+func by(name string) string {
+	if name == "" {
+		return ""
+	}
+	return " by " + name
 }
 
 // ---------------------------------------------------------------------------
