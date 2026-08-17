@@ -73,6 +73,10 @@ func (p *BetterStackPlugin) handleWebhook(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Better Stack sends template variables it cannot fill verbatim (e.g. "$RESOLVED_BY"
+	// on an alarm); treat those as absent rather than rendering them into posts.
+	payload.normalize()
+
 	incidentID := payload.Data.ID
 	if incidentID == "" {
 		p.API.LogError("Better Stack webhook payload missing incident ID")
@@ -106,7 +110,7 @@ func (p *BetterStackPlugin) handleNewIncident(w http.ResponseWriter, config *con
 	post := &model.Post{
 		UserId:    p.botUserID,
 		ChannelId: config.AlertChannelID,
-		Message:   payload.FormatOriginalPost(),
+		Message:   payload.FormatOriginalPost(payload.Status()),
 		Props: model.StringInterface{
 			"betterstack_incident_id": incidentID,
 		},
@@ -127,23 +131,21 @@ func (p *BetterStackPlugin) handleNewIncident(w http.ResponseWriter, config *con
 	// If surrounding logs were included, post them as a thread reply so they
 	// don't dominate the root post.
 	if logsMessage := payload.FormatLogsReply(); logsMessage != "" {
-		logsReply := &model.Post{
-			UserId:    p.botUserID,
-			ChannelId: config.AlertChannelID,
-			RootId:    created.Id,
-			Message:   logsMessage,
-		}
-		if _, appErr := p.API.CreatePost(logsReply); appErr != nil {
-			p.API.LogError("Failed to post surrounding logs reply", "incident_id", incidentID, "error", appErr.Error())
-			// Non-fatal — the incident post was created successfully.
-		}
+		p.postThreadReply(config, created.Id, logsMessage, "surrounding logs", incidentID)
+	}
+
+	// An incident we have never posted about can still arrive as a comment event, e.g.
+	// if the alarm webhook was missed.
+	if commentMessage := payload.FormatCommentReply(); commentMessage != "" {
+		p.postThreadReply(config, created.Id, commentMessage, "comment", incidentID)
 	}
 
 	w.WriteHeader(http.StatusOK)
 }
 
-// handleExistingIncident posts a thread reply and updates the status footer on the original post.
-// If the original post no longer exists (e.g. it was deleted), it falls back to creating a new post.
+// handleExistingIncident posts a thread reply for the event and re-renders the original
+// post so its body always reflects the incident's current state. If the original post no
+// longer exists (e.g. it was deleted), it falls back to creating a new post.
 func (p *BetterStackPlugin) handleExistingIncident(w http.ResponseWriter, config *configuration, payload *WebhookPayload, existingPostID string) {
 	incidentID := payload.Data.ID
 
@@ -155,21 +157,23 @@ func (p *BetterStackPlugin) handleExistingIncident(w http.ResponseWriter, config
 		return
 	}
 
-	// --- Post a thread reply with the status update ---
-	reply := &model.Post{
-		UserId:    p.botUserID,
-		ChannelId: config.AlertChannelID,
-		RootId:    existingPostID,
-		Message:   payload.FormatThreadReply(),
+	// The status the post currently shows tells us whether this alarm is a reopen.
+	status := payload.EffectiveStatus(previousStatusFromPost(originalPost.Message))
+
+	// --- Post a thread reply for this event ---
+	// A comment does not change the incident status, so it replaces the status update
+	// rather than being posted alongside a repeat of the current status.
+	if payload.IsComment() {
+		p.postThreadReply(config, existingPostID, payload.FormatCommentReply(), "comment", incidentID)
+	} else {
+		p.postThreadReply(config, existingPostID, payload.FormatThreadReply(status), "status update", incidentID)
 	}
 
-	if _, appErr := p.API.CreatePost(reply); appErr != nil {
-		p.API.LogError("Failed to create thread reply", "root_post_id", existingPostID, "error", appErr.Error())
-		// Continue so we still try to update the original post.
-	}
-
-	// --- Update the status footer on the original post ---
-	originalPost.Message = payload.updateStatusFooter(originalPost.Message)
+	// --- Re-render the original post from the current payload ---
+	// Rewriting the whole body (rather than only the status footer) keeps the
+	// acknowledged and resolved lines correct when the incident is reopened and then
+	// acknowledged or resolved by someone else.
+	originalPost.Message = payload.FormatOriginalPost(status)
 
 	if _, appErr := p.API.UpdatePost(originalPost); appErr != nil {
 		p.API.LogError("Failed to update original incident post", "post_id", existingPostID, "error", appErr.Error())
@@ -178,4 +182,23 @@ func (p *BetterStackPlugin) handleExistingIncident(w http.ResponseWriter, config
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// postThreadReply posts a reply in an incident's thread. Failures are logged but never
+// fail the webhook — the root post is the important part.
+func (p *BetterStackPlugin) postThreadReply(config *configuration, rootID, message, kind, incidentID string) {
+	if message == "" {
+		return
+	}
+
+	reply := &model.Post{
+		UserId:    p.botUserID,
+		ChannelId: config.AlertChannelID,
+		RootId:    rootID,
+		Message:   message,
+	}
+
+	if _, appErr := p.API.CreatePost(reply); appErr != nil {
+		p.API.LogError("Failed to post incident thread reply", "kind", kind, "root_post_id", rootID, "incident_id", incidentID, "error", appErr.Error())
+	}
 }

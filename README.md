@@ -10,7 +10,7 @@ This plugin was built with the assistance of AI tooling and has been reviewed by
 
 ## Features
 
-- **Incident threads** — When Better Stack fires a webhook, a post is created in your configured alert channel. Each status update (acknowledged, resolved) is posted as a thread reply on the original incident post, keeping the full incident lifecycle in one place. The post footer is updated in-place to always show the latest status.
+- **Incident threads** — When Better Stack fires a webhook, a post is created in your configured alert channel. Every subsequent event (acknowledged, resolved, reopened, commented) is posted as a thread reply on the original incident post, keeping the full incident lifecycle in one place. The post itself is re-rendered on each event, so it always shows the current status and who acknowledged or resolved the incident.
 - **Surrounding logs** — If your Better Stack webhook payload includes `surrounding_logs`, they are posted as a separate thread reply rather than cluttering the main incident post.
 - **On-call change notifications** — The plugin polls Better Stack every 10 minutes and posts to the alert channel whenever the on-call person changes, tagging them with a Mattermost `@mention` if their Better Stack email matches a Mattermost account.
 - **Daily on-call digest** — Optionally post the full on-call roster every morning at 08:00 CET/CEST, regardless of whether anything has changed.
@@ -81,16 +81,34 @@ Configure your Better Stack webhook with the following JSON body to include surr
             "acknowledged_at": "$ACKNOWLEDGED_AT",
             "acknowledged_by": "$ACKNOWLEDGED_BY",
             "resolved_at": "$RESOLVED_AT",
+            "resolved_by": "$RESOLVED_BY",
             "response_content": "$RESPONSE_CONTENT",
             "response_url": "$RESPONSE_URL",
             "screenshot_url": "$SCREENSHOT_URL",
-            "surrounding_logs": "$METADATA.Surrounding logs"
+            "surrounding_logs": "$METADATA.Surrounding logs",
+            "comment_id": "$COMMENT_ID",
+            "comment_content": "$COMMENT_CONTENT",
+            "comment_created_at": "$COMMENT_CREATED_AT",
+            "comment_author_name": "$COMMENT_AUTHOR_NAME",
+            "comment_author_email": "$COMMENT_AUTHOR_EMAIL"
         }
     }
 }
 ```
 
-Configure the same webhook URL for all three Better Stack alert types: **alarm**, **acknowledged**, and **resolved**. The plugin will thread all updates onto the original incident post automatically.
+**Use this same body for every event.** The plugin re-renders the incident post from each payload it receives, so a body that omits fields on some events will drop them from the post. Variables Better Stack cannot fill (`$RESOLVED_BY` on an alarm, the `$COMMENT_*` set on a status change) arrive unexpanded and are ignored, so a single body template is safe for all of them.
+
+Configure the same webhook URL for every Better Stack incident event: **alarm**, **acknowledged**, **resolved**, **reopened**, and **commented**. The plugin threads all updates onto the original incident post automatically:
+
+| Event         | What the plugin does                                                                                              |
+| ------------- | ------------------------------------------------------------------------------------------------------------------ |
+| **alarm**     | Creates the incident post, plus a thread reply with the surrounding logs if the payload includes them              |
+| **acknowledged** | Thread reply `:bell: Acknowledged by <acknowledger>`, and updates the post's status and Acknowledged line       |
+| **resolved**  | Thread reply `:white_check_mark: Resolved by <resolver>`, and updates the post's status and Resolved line          |
+| **reopened**  | Thread reply `:arrows_counterclockwise: Reopened`, clears the stale acknowledgement and resolution from the post   |
+| **commented** | Thread reply `:speech_balloon: Comment from <author>` quoting the comment; the incident status is left unchanged   |
+
+A reopen is recognised by the incident alarming again after its post showed RESOLVED — Better Stack clears the acknowledged and resolved timestamps on reopen, so the two are otherwise indistinguishable.
 
 ## Uptime Check
 
