@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 
@@ -14,11 +15,39 @@ import (
 //
 // Routes:
 //
-//	POST /api/v1/webhook/{token}  — Better Stack incident webhook (no Mattermost auth, token in path)
+//	POST     /api/v1/webhook/{token}  — Better Stack incident webhook (no Mattermost auth, token in path)
+//	GET|HEAD /api/v1/health/{token}   — uptime check for monitoring this plugin (same token)
 func (p *BetterStackPlugin) ServeHTTP(c *plugin.Context, w http.ResponseWriter, r *http.Request) {
 	router := mux.NewRouter()
 	router.HandleFunc("/api/v1/webhook/{token}", p.handleWebhook).Methods(http.MethodPost)
+	router.HandleFunc("/api/v1/health/{token}", p.handleHealth).Methods(http.MethodGet, http.MethodHead)
 	router.ServeHTTP(w, r)
+}
+
+// authorizeSecret validates the secret token in the URL path and, when configured, the
+// Basic Auth credentials. It writes the error response and returns false if the request
+// is not authorized.
+func (p *BetterStackPlugin) authorizeSecret(w http.ResponseWriter, r *http.Request, config *configuration) bool {
+	if config.WebhookToken == "" {
+		p.API.LogError("Request received but webhook token is not configured", "path", r.URL.Path)
+		http.Error(w, "Webhook not configured", http.StatusServiceUnavailable)
+		return false
+	}
+
+	if subtle.ConstantTimeCompare([]byte(mux.Vars(r)["token"]), []byte(config.WebhookToken)) != 1 {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return false
+	}
+
+	if config.WebhookUsername != "" && config.WebhookPassword != "" {
+		username, password, ok := r.BasicAuth()
+		if !ok || username != config.WebhookUsername || password != config.WebhookPassword {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return false
+		}
+	}
+
+	return true
 }
 
 // handleWebhook receives Better Stack incident webhook payloads and:
@@ -31,25 +60,9 @@ func (p *BetterStackPlugin) ServeHTTP(c *plugin.Context, w http.ResponseWriter, 
 func (p *BetterStackPlugin) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	config := p.getConfiguration()
 
-	// --- Secret token validation ---
-	token := mux.Vars(r)["token"]
-	if config.WebhookToken == "" {
-		p.API.LogError("Webhook received but token is not configured")
-		http.Error(w, "Webhook not configured", http.StatusServiceUnavailable)
+	// --- Secret token and optional Basic Auth validation ---
+	if !p.authorizeSecret(w, r, config) {
 		return
-	}
-	if token != config.WebhookToken {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	// --- Optional Basic Auth validation ---
-	if config.WebhookUsername != "" && config.WebhookPassword != "" {
-		username, password, ok := r.BasicAuth()
-		if !ok || username != config.WebhookUsername || password != config.WebhookPassword {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
 	}
 
 	// --- Parse payload ---

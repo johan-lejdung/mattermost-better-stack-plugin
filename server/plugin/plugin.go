@@ -29,6 +29,12 @@ type BetterStackPlugin struct {
 
 	backgroundJob *cluster.Job
 
+	// healthLock guards the cached result of the uptime check's Better Stack API probe.
+	healthLock       sync.Mutex
+	healthProbeToken string
+	healthProbedAt   time.Time
+	healthProbeErr   error
+
 	// configurationLock synchronizes access to the configuration.
 	configurationLock sync.RWMutex
 

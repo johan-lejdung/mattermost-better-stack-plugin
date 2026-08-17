@@ -72,6 +72,14 @@ func (c *BetterStackClient) get(path string, out interface{}) error {
 	return nil
 }
 
+// Ping performs the cheapest authenticated call available against the Better Stack
+// Uptime API to verify that the API is reachable and the configured token is valid.
+// It requests a single monitor and discards the payload.
+func (c *BetterStackClient) Ping() error {
+	var resp struct{}
+	return c.get("/v2/monitors?per_page=1", &resp)
+}
+
 // ---------------------------------------------------------------------------
 // On-call schedules
 // ---------------------------------------------------------------------------
